@@ -60,8 +60,23 @@ import java.util.logging.Level;
  *   <li>Persisting locked map content to NBT, Redis, and database</li>
  *   <li>Applying persisted map views to items on inventory load</li>
  *   <li>Managing map ID bindings across servers</li>
- *   <li>Sanitizing foreign unlocked maps</li>
+ *   <li>Suspending unlocked maps on foreign servers (unknown map, ID -1)</li>
+ *   <li>Restoring unlocked maps when player returns to origin server</li>
  * </ul>
+ *
+ * <h2>Unlocked Map Behavior</h2>
+ * <pre>
+ * On persist: Tag with {origin, origin_id} in NBT
+ *
+ * On apply (foreign server):
+ *   → Set map ID to -1 (unknown map)
+ *   → Keep NBT tags for later restoration
+ *   → Player sees unknown/blank map, cannot explore
+ *
+ * On apply (origin server):
+ *   → Restore original MapView by ID
+ *   → Player sees their original explored content
+ * </pre>
  */
 public class BukkitMapPersistenceService implements MapPersistenceService {
 
@@ -81,8 +96,24 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
     /** NBT key for original map ID within MAP_DATA_KEY compound */
     public static final String MAP_ID_KEY = "id";
 
-    /** NBT key for marking foreign unlocked maps (origin only, no pixel data) */
-    public static final String MAP_ORIGIN_ONLY_KEY = "husksync:map_origin_only";
+    /** NBT compound key for unlocked map identity (origin + original ID, no pixel data) */
+    public static final String MAP_UNLOCKED_KEY = "husksync:unlocked_map";
+
+    /** NBT key for origin server name within MAP_UNLOCKED_KEY compound */
+    public static final String UNLOCKED_ORIGIN_KEY = "origin";
+
+    /** NBT key for original map ID within MAP_UNLOCKED_KEY compound */
+    public static final String UNLOCKED_ORIGIN_ID_KEY = "origin_id";
+
+    /**
+     * Special map ID used for suspended unlocked maps on foreign servers.
+     * ID -1 creates an "unknown map" - no map data exists for this ID,
+     * so the client displays it as blank. This avoids allocating real map IDs.
+     * <p>
+     * Naturally reaching -1 would require creating ~4 billion maps (integer overflow),
+     * which is practically impossible in normal gameplay.
+     */
+    public static final int UNKNOWN_MAP_ID = -1;
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Instance Fields
@@ -224,7 +255,7 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
     /**
      * Process items before saving to snapshot.
      * For locked maps: persist content to NBT and database.
-     * For unlocked maps: tag with origin server (for later sanitization).
+     * For unlocked maps: tag with origin server (for later suspend/restore).
      *
      * @param items            the items to process
      * @param delegateRenderer the player to use for rendering map canvases
@@ -241,7 +272,7 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
     /**
      * Process items when applying to player inventory.
      * For locked maps: resolve bindings and render content.
-     * For foreign unlocked maps: sanitize to blank local maps.
+     * For foreign unlocked maps: suspend as unknown map (ID -1).
      *
      * @param items the items to process
      * @return the processed items
@@ -349,14 +380,22 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
         }
 
         final String currentServer = getCurrentServer();
+
+        // If this is an unlocked map whose origin is another server, it's a suspended placeholder.
+        // Do not persist it as a locked map or modify its identity.
+        final UnlockedMapInfo unlockedInfo = readUnlockedMapInfo(map);
+        if (unlockedInfo != null && !unlockedInfo.isOrigin(currentServer)) {
+            return map;
+        }
+
         final int mapId = meta.getMapId();
 
         if (view.isLocked()) {
             // Persist locked map content
             return persistLockedMapItem(map, meta, view, currentServer, mapId, delegateRenderer);
         } else {
-            // Tag unlocked map with origin for later sanitization
-            return tagUnlockedMapOrigin(map, currentServer);
+            // Tag unlocked map with origin for later suspend/restore
+            return tagUnlockedMap(map, meta, currentServer);
         }
     }
 
@@ -381,6 +420,12 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
             mapData.setString(MAP_ORIGIN_KEY, serverName);
             mapData.setInteger(MAP_ID_KEY, mapId);
 
+            // Clean up stale unlocked tag if this map was previously unlocked
+            if (nbt.hasTag(MAP_UNLOCKED_KEY)) {
+                nbt.removeKey(MAP_UNLOCKED_KEY);
+                plugin.debug("Removed stale unlocked tag (map is now locked)");
+            }
+
             // Save content to Redis + DB if not already present
             final MapIdentity identity = new MapIdentity(serverName, mapId);
             if (!hasContent(identity)) {
@@ -393,26 +438,60 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
         return map;
     }
 
+    /**
+     * Info about an unlocked map's origin.
+     */
+    private record UnlockedMapInfo(@NotNull String origin, int originId) {
+        boolean isOrigin(@NotNull String currentServer) {
+            return origin.equals(currentServer);
+        }
+    }
+
     @NotNull
-    private ItemStack tagUnlockedMapOrigin(@NotNull ItemStack map, @NotNull String serverName) {
+    private ItemStack tagUnlockedMap(@NotNull ItemStack map, @NotNull MapMeta meta, @NotNull String serverName) {
+        final int mapId = meta.getMapId();
         NBT.modify(map, nbt -> {
             // Don't overwrite existing tags
-            if (nbt.hasTag(MAP_DATA_KEY) || nbt.hasTag(MAP_ORIGIN_ONLY_KEY)) {
+            if (nbt.hasTag(MAP_DATA_KEY) || nbt.hasTag(MAP_UNLOCKED_KEY)) {
                 return;
             }
-            // Tag with origin server only (no pixel data)
-            nbt.setString(MAP_ORIGIN_ONLY_KEY, serverName);
-            plugin.debug("Tagged unlocked map with origin: %s".formatted(serverName));
+
+            // Tag with origin server and original map ID
+            final ReadWriteNBT unlocked = nbt.getOrCreateCompound(MAP_UNLOCKED_KEY);
+            unlocked.setString(UNLOCKED_ORIGIN_KEY, serverName);
+            unlocked.setInteger(UNLOCKED_ORIGIN_ID_KEY, mapId);
+            plugin.debug("Tagged unlocked map: origin=%s, id=%d".formatted(serverName, mapId));
         });
         return map;
     }
 
-    @SuppressWarnings("deprecation")
+    @Nullable
+    private UnlockedMapInfo readUnlockedMapInfo(@NotNull ItemStack map) {
+        final String[] origin = {null};
+        final int[] originId = {-1};
+
+        NBT.get(map, nbt -> {
+            if (nbt.hasTag(MAP_UNLOCKED_KEY)) {
+                final ReadableNBT unlocked = nbt.getCompound(MAP_UNLOCKED_KEY);
+                if (unlocked != null) {
+                    origin[0] = unlocked.getString(UNLOCKED_ORIGIN_KEY);
+                    originId[0] = unlocked.getInteger(UNLOCKED_ORIGIN_ID_KEY);
+                }
+            }
+        });
+
+        if (origin[0] != null && !origin[0].isEmpty() && originId[0] != -1) {
+            return new UnlockedMapInfo(origin[0], originId[0]);
+        }
+        return null;
+    }
+
     @NotNull
     private ItemStack applyMapItem(@NotNull ItemStack map) {
         final MapMeta meta = Objects.requireNonNull((MapMeta) map.getItemMeta());
+        final String currentServer = getCurrentServer();
 
-        // Check for locked map (has full MAP_DATA_KEY)
+        // ─── Check for LOCKED map (has full MAP_DATA_KEY) ───
         final boolean[] hasLockedMapData = {false};
         final String[] originServer = {null};
         final int[] originId = {-1};
@@ -429,24 +508,22 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
         });
 
         if (hasLockedMapData[0] && originServer[0] != null && originId[0] != -1) {
-            // Process as locked map
             return applyLockedMapItem(map, meta, new MapIdentity(originServer[0], originId[0]));
         }
 
-        // Check for origin-only tag (unlocked foreign map)
-        final String[] originOnly = {null};
-        NBT.get(map, nbt -> {
-            if (nbt.hasTag(MAP_ORIGIN_ONLY_KEY)) {
-                originOnly[0] = nbt.getString(MAP_ORIGIN_ONLY_KEY);
+        // ─── Check for UNLOCKED map ───
+        final UnlockedMapInfo unlockedInfo = readUnlockedMapInfo(map);
+        if (unlockedInfo != null) {
+            if (unlockedInfo.isOrigin(currentServer)) {
+                // Back on origin server → RESTORE original map
+                return restoreUnlockedMap(map, meta, unlockedInfo);
+            } else {
+                // Foreign server → SUSPEND (unknown map ID -1, preserve identity)
+                return suspendUnlockedMap(map, meta, unlockedInfo);
             }
-        });
-
-        if (originOnly[0] != null && !originOnly[0].equals(getCurrentServer())) {
-            // Sanitize foreign unlocked map
-            return sanitizeForeignUnlockedMap(map, meta, originOnly[0]);
         }
 
-        // No HuskSync tags - leave as vanilla
+        // ─── VANILLA map (no HuskSync tags) ───
         return map;
     }
 
@@ -584,23 +661,71 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
         return map;
     }
 
+    /**
+     * Restore an unlocked map when the player returns to its origin server.
+     * The map will display its original content again.
+     */
     @NotNull
-    private ItemStack sanitizeForeignUnlockedMap(@NotNull ItemStack map, @NotNull MapMeta meta,
-                                                  @NotNull String foreignOrigin) {
-        // Create a fresh blank map on the current server
-        final MapView blankView = Bukkit.createMap(getDefaultMapWorld());
-        blankView.setLocked(false); // Keep it unlocked
+    private ItemStack restoreUnlockedMap(@NotNull ItemStack map, @NotNull MapMeta meta,
+                                          @NotNull UnlockedMapInfo info) {
+        final MapView originalView = Bukkit.getMap(info.originId());
 
-        meta.setMapView(blankView);
+        if (originalView != null) {
+            meta.setMapView(originalView);
+            map.setItemMeta(meta);
+            plugin.debug("Restored unlocked map to original ID #%d (origin: %s)"
+                    .formatted(info.originId(), info.origin()));
+        } else {
+            // Original MapView no longer exists (world reset, etc.) - create a fresh map
+            final MapView freshView = Bukkit.createMap(getDefaultMapWorld());
+            freshView.setLocked(false);
+            meta.setMapView(freshView);
+            map.setItemMeta(meta);
+
+            // Update the NBT to reflect new identity
+            final int newId = freshView.getId();
+            NBT.modify(map, nbt -> {
+                final ReadWriteNBT unlocked = nbt.getOrCreateCompound(MAP_UNLOCKED_KEY);
+                unlocked.setInteger(UNLOCKED_ORIGIN_ID_KEY, newId);
+            });
+
+            plugin.debug("Original map #%d not found, created fresh map #%d (origin: %s)"
+                    .formatted(info.originId(), newId, info.origin()));
+        }
+
+        return map;
+    }
+
+    /**
+     * Suspend an unlocked map when on a foreign server.
+     * <p>
+     * Instead of creating a real MapView placeholder (which wastes map IDs), we set the
+     * map ID to {@link #UNKNOWN_MAP_ID} (-1). This makes it an "unknown map" - the client
+     * displays it as blank because no map data exists for ID -1.
+     * <p>
+     * The original identity is preserved in NBT ({@link #MAP_UNLOCKED_KEY}) for restoration
+     * when the player returns to the origin server.
+     */
+    @SuppressWarnings("deprecation")
+    @NotNull
+    private ItemStack suspendUnlockedMap(@NotNull ItemStack map, @NotNull MapMeta meta,
+                                          @NotNull UnlockedMapInfo info) {
+        // If already suspended (ID is -1), nothing to do
+        if (meta.getMapId() == UNKNOWN_MAP_ID) {
+            plugin.debug("Already suspended unlocked map (origin: %s, id: %d) as unknown map"
+                    .formatted(info.origin(), info.originId()));
+            return map;
+        }
+
+        // Set to unknown map ID - client will show blank (no map_-1.dat exists)
+        meta.setMapId(UNKNOWN_MAP_ID);
         map.setItemMeta(meta);
 
-        // Remove the origin-only tag so it becomes a normal local map
-        NBT.modify(map, nbt -> {
-            nbt.removeKey(MAP_ORIGIN_ONLY_KEY);
-        });
+        // NBT tags (MAP_UNLOCKED_KEY) are preserved for restoration later
 
-        plugin.debug("Sanitized foreign unlocked map (origin: %s) -> new blank local map #%d"
-                .formatted(foreignOrigin, blankView.getId()));
+        plugin.debug("Suspended unlocked map (origin: %s, id: %d) -> unknown map (ID %d)"
+                .formatted(info.origin(), info.originId(), UNKNOWN_MAP_ID));
+
         return map;
     }
 
