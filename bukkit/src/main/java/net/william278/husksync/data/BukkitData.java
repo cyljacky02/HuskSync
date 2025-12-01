@@ -155,7 +155,7 @@ public abstract class BukkitData implements Data {
                 final Player player = user.getPlayer();
                 this.clearInventoryCraftingSlots(player);
                 player.setItemOnCursor(null);
-                player.getInventory().setContents(plugin.setMapViews(getContents()));
+                player.getInventory().setContents(plugin.getMapPersistenceService().applyMaps(getContents()));
                 player.getInventory().setHeldItemSlot(heldItemSlot);
                 //noinspection UnstableApiUsage
                 player.updateInventory();
@@ -195,7 +195,7 @@ public abstract class BukkitData implements Data {
 
             @Override
             public void apply(@NotNull BukkitUser user, @NotNull BukkitHuskSync plugin) throws IllegalStateException {
-                ItemStack[] fullContents = plugin.setMapViews(getContents());
+                ItemStack[] fullContents = plugin.getMapPersistenceService().applyMaps(getContents());
                 ItemStack[] enderChestContents = Arrays.copyOf(fullContents, Math.min(fullContents.length, user.getPlayer().getEnderChest().getSize()));
                 user.getPlayer().getEnderChest().setContents(enderChestContents);
             }

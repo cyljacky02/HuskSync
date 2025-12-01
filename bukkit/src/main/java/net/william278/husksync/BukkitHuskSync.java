@@ -49,6 +49,7 @@ import net.william278.husksync.hook.PlanHook;
 import net.william278.husksync.listener.BukkitEventListener;
 import net.william278.husksync.listener.LockedHandler;
 import net.william278.husksync.maps.BukkitMapHandler;
+import net.william278.husksync.maps.BukkitMapPersistenceService;
 import net.william278.husksync.migrator.LegacyMigrator;
 import net.william278.husksync.migrator.Migrator;
 import net.william278.husksync.migrator.MpdbMigrator;
@@ -95,6 +96,7 @@ public class BukkitHuskSync extends JavaPlugin implements HuskSync, BukkitTask.S
     private final HashMap<Identifier, Serializer<? extends Data>> serializers = Maps.newHashMap();
     private final Map<UUID, Map<Identifier, Data>> playerCustomDataStore = Maps.newConcurrentMap();
     private final Map<Integer, MapView> mapViews = Maps.newConcurrentMap();
+    private BukkitMapPersistenceService mapPersistenceService;
     private final List<Migrator> availableMigrators = Lists.newArrayList();
     private final Set<UUID> lockedPlayers = Sets.newConcurrentHashSet();
     private final Set<UUID> disconnectingPlayers = Sets.newConcurrentHashSet();
@@ -206,6 +208,11 @@ public class BukkitHuskSync extends JavaPlugin implements HuskSync, BukkitTask.S
         initialize("Redis server connection", (plugin) -> {
             this.redisManager = new RedisManager(this);
             this.redisManager.initialize();
+        });
+
+        // Prepare map persistence service
+        initialize("map persistence service", (plugin) -> {
+            mapPersistenceService = new BukkitMapPersistenceService(this);
         });
 
         // Prepare data syncer
@@ -398,6 +405,16 @@ public class BukkitHuskSync extends JavaPlugin implements HuskSync, BukkitTask.S
     @NotNull
     public BukkitHuskSync getPlugin() {
         return this;
+    }
+
+    /**
+     * Get the map persistence service.
+     *
+     * @return the map persistence service
+     */
+    @NotNull
+    public BukkitMapPersistenceService getMapPersistenceService() {
+        return mapPersistenceService;
     }
 
 }

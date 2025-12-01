@@ -134,8 +134,13 @@ public class BukkitEventListener extends EventListener implements BukkitJoinEven
 
     @EventHandler(ignoreCancelled = true)
     public void onMapInitialize(@NotNull MapInitializeEvent event) {
-        if (plugin.getSettings().getSynchronization().isPersistLockedMaps() && event.getMap().isLocked()) {
-            getPlugin().runAsync(() -> ((BukkitHuskSync) plugin).renderInitializingLockedMap(event.getMap()));
+        final BukkitHuskSync bukkitPlugin = getPlugin();
+        if (!bukkitPlugin.getMapPersistenceService().isEnabled()) {
+            return;
+        }
+        // Only process locked maps (unlocked maps are local and should not trigger rendering)
+        if (event.getMap().isLocked()) {
+            bukkitPlugin.runAsync(() -> bukkitPlugin.getMapPersistenceService().renderInitializingMap(event.getMap()));
         }
     }
 

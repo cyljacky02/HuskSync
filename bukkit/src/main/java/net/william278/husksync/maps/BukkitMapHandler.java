@@ -52,6 +52,13 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.logging.Level;
 
+/**
+ * Legacy interface for map persistence operations.
+ *
+ * @deprecated Use {@link BukkitMapPersistenceService} instead. This interface is retained
+ *             for backwards compatibility and will be removed in a future version.
+ */
+@Deprecated(since = "3.8", forRemoval = true)
 public interface BukkitMapHandler {
 
     // The map used to store HuskSync data in ItemStack NBT
@@ -179,7 +186,7 @@ public interface BukkitMapHandler {
     }
 
     @Nullable
-    private MapData deserializeMapData(byte @NotNull [] data) {
+    private MapData deserializeMapData(@NotNull byte[] data) {
         try {
             return getPlugin().getDataAdapter().fromBytes(data, AdaptableMapData.class)
                     .getData(getPlugin().getDataVersion(getPlugin().getMinecraftVersion()));

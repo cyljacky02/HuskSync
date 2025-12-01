@@ -21,6 +21,7 @@ package net.william278.husksync.data;
 
 import net.william278.husksync.BukkitHuskSync;
 import net.william278.husksync.maps.BukkitMapHandler;
+import net.william278.husksync.maps.BukkitMapPersistenceService;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.PlayerInventory;
 import org.jetbrains.annotations.NotNull;
@@ -75,7 +76,7 @@ public interface BukkitUserDataHolder extends UserDataHolder {
         }
         final PlayerInventory inventory = getPlayer().getInventory();
         return Optional.of(BukkitData.Items.Inventory.from(
-                getMapPersister().persistLockedMaps(inventory.getContents(), getPlayer()),
+                getMapPersistenceService().persistMaps(inventory.getContents(), getPlayer()),
                 inventory.getHeldItemSlot()
         ));
     }
@@ -84,7 +85,7 @@ public interface BukkitUserDataHolder extends UserDataHolder {
     @Override
     default Optional<Data.Items.EnderChest> getEnderChest() {
         return Optional.of(BukkitData.Items.EnderChest.adapt(
-                getMapPersister().persistLockedMaps(getPlayer().getEnderChest().getContents(), getPlayer())
+                getMapPersistenceService().persistMaps(getPlayer().getEnderChest().getContents(), getPlayer())
         ));
     }
 
@@ -168,9 +169,18 @@ public interface BukkitUserDataHolder extends UserDataHolder {
         return getPlayer();
     }
 
+    /**
+     * @deprecated Use {@link #getMapPersistenceService()} instead
+     */
+    @Deprecated(since = "3.8")
     @NotNull
     default BukkitMapHandler getMapPersister() {
         return (BukkitHuskSync) getPlugin();
+    }
+
+    @NotNull
+    default BukkitMapPersistenceService getMapPersistenceService() {
+        return ((BukkitHuskSync) getPlugin()).getMapPersistenceService();
     }
 
 
