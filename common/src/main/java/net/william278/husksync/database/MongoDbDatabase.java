@@ -23,6 +23,7 @@ import com.google.common.collect.Lists;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoException;
 import com.mongodb.client.FindIterable;
+import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.Updates;
 import net.william278.husksync.HuskSync;
 import net.william278.husksync.config.Settings;
@@ -410,11 +411,15 @@ public class MongoDbDatabase extends Database {
     @Override
     public void setMapBinding(@NotNull String fromServerName, int fromMapId, @NotNull String toServerName, int toMapId) {
         try {
+            final Document filter = new Document("from_server_name", fromServerName)
+                    .append("from_id", fromMapId)
+                    .append("to_server_name", toServerName);
             final Document doc = new Document("from_server_name", fromServerName)
                     .append("from_id", fromMapId)
                     .append("to_server_name", toServerName)
                     .append("to_id", toMapId);
-            mongoCollectionHelper.insertDocument(mapIdsTable, doc);
+            mongoCollectionHelper.getCollection(mapIdsTable).replaceOne(
+                    filter, doc, new ReplaceOptions().upsert(true));
         } catch (MongoException e) {
             plugin.log(Level.SEVERE, "Failed to connect map IDs in the database", e);
         }

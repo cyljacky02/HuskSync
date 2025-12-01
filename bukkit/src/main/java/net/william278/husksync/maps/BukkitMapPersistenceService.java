@@ -533,7 +533,10 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
         if (view == null) {
             view = Bukkit.createMap(getDefaultMapWorld());
             localId = view.getId();
-            setBinding(identity, getCurrentServer(), localId);
+            // Only create binding if not on origin server
+            if (!isOrigin) {
+                setBinding(identity, getCurrentServer(), localId);
+            }
         }
 
         renderMapView(view, mapData);

@@ -524,7 +524,9 @@ public class PostgresDatabase extends Database {
             try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
                     INSERT INTO %map_ids_table%
                     (from_server_name,from_id,to_server_name,to_id)
-                    VALUES (?,?,?,?);"""))) {
+                    VALUES (?,?,?,?)
+                    ON CONFLICT (from_server_name, from_id, to_server_name)
+                    DO UPDATE SET to_id = EXCLUDED.to_id;"""))) {
                 statement.setString(1, fromServerName);
                 statement.setInt(2, fromMapId);
                 statement.setString(3, toServerName);
