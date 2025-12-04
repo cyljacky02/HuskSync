@@ -567,23 +567,8 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
             return map;
         }
 
-        // Need to fetch content and render
-        Optional<MapContent> contentOpt = getContent(identity);
-        MapData mapData = null;
-
-        if (contentOpt.isPresent()) {
-            mapData = deserializeContent(contentOpt.get());
-        } else {
-            // Try legacy NBT data
-            final MapData[] legacyData = {null};
-            NBT.get(map, nbt -> {
-                if (nbt.hasTag(MAP_LEGACY_PIXEL_DATA_KEY)) {
-                    legacyData[0] = readLegacyMapItemData(nbt);
-                }
-            });
-            mapData = legacyData[0];
-        }
-
+        // Fetch content from Redis/DB or legacy NBT
+        final MapData mapData = fetchMapData(identity, map);
         if (mapData == null) {
             plugin.debug("No content found for map %s, skipping".formatted(identity));
             return map;
@@ -626,23 +611,8 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
     @NotNull
     private ItemStack applyUnboundLockedMap(@NotNull ItemStack map, @NotNull MapMeta meta,
                                             @NotNull MapIdentity identity, @NotNull String currentServer) {
-        // Fetch content
-        Optional<MapContent> contentOpt = getContent(identity);
-        MapData mapData = null;
-
-        if (contentOpt.isPresent()) {
-            mapData = deserializeContent(contentOpt.get());
-        } else {
-            // Try legacy NBT data
-            final MapData[] legacyData = {null};
-            NBT.get(map, nbt -> {
-                if (nbt.hasTag(MAP_LEGACY_PIXEL_DATA_KEY)) {
-                    legacyData[0] = readLegacyMapItemData(nbt);
-                }
-            });
-            mapData = legacyData[0];
-        }
-
+        // Fetch content from Redis/DB or legacy NBT
+        final MapData mapData = fetchMapData(identity, map);
         if (mapData == null) {
             plugin.debug("No content found for unbound map %s, skipping".formatted(identity));
             return map;
@@ -741,6 +711,32 @@ public class BukkitMapPersistenceService implements MapPersistenceService {
         view.setTrackingPosition(false);
         view.setUnlimitedTracking(false);
         renderedViews.put(view.getId(), view);
+    }
+
+    /**
+     * Fetch map data for a locked map identity.
+     * Tries Redis/DB content first, then falls back to legacy NBT data on the item.
+     *
+     * @param identity the map's logical identity
+     * @param map      the item stack (for legacy NBT fallback)
+     * @return the MapData if found, or null
+     */
+    @Nullable
+    private MapData fetchMapData(@NotNull MapIdentity identity, @NotNull ItemStack map) {
+        // Try Redis/DB content
+        Optional<MapContent> contentOpt = getContent(identity);
+        if (contentOpt.isPresent()) {
+            return deserializeContent(contentOpt.get());
+        }
+
+        // Fallback: legacy NBT data on item
+        final MapData[] legacyData = {null};
+        NBT.get(map, nbt -> {
+            if (nbt.hasTag(MAP_LEGACY_PIXEL_DATA_KEY)) {
+                legacyData[0] = readLegacyMapItemData(nbt);
+            }
+        });
+        return legacyData[0];
     }
 
     @Nullable

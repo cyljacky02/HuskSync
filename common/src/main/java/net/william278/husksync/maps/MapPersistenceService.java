@@ -47,6 +47,10 @@ import java.util.Optional;
  *        -> Render canvas -> Save content to Redis + DB
  *        -> Write identity to NBT
  *
+ * Snapshot Save (local unlocked map):
+ *   Item -> Tag with origin server + original ID in NBT
+ *        -> No content persistence (unlocked maps are local)
+ *
  * Snapshot Apply (locked map):
  *   Item -> Read MapIdentity from NBT
  *        -> Find or create binding for current server
@@ -54,10 +58,15 @@ import java.util.Optional;
  *        -> Render into MapView, lock it
  *        -> Update item meta
  *
- * Snapshot Apply (foreign unlocked map):
+ * Snapshot Apply (unlocked map on origin server):
+ *   Item -> Detect origin == current server
+ *        -> Restore original MapView if possible
+ *        -> Or create new unlocked MapView, update NBT origin ID
+ *
+ * Snapshot Apply (unlocked map on foreign server):
  *   Item -> Detect origin != current server
- *        -> Replace with blank local MapView
- *        -> Remove origin tag
+ *        -> Suspend: set map ID to -1 (unknown/blank)
+ *        -> Preserve identity in NBT for later restoration
  * </pre>
  */
 public interface MapPersistenceService {
