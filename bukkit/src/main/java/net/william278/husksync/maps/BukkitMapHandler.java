@@ -339,10 +339,11 @@ public interface BukkitMapHandler {
         }
         final Optional<MapView> optionalView = getMapView(view.getId());
         if (optionalView.isPresent()) {
+            final MapView cachedView = optionalView.get();
             view.getRenderers().clear();
-            view.getRenderers().addAll(optionalView.get().getRenderers());
+            view.getRenderers().addAll(cachedView.getRenderers());
             view.setLocked(true);
-            view.setScale(MapView.Scale.NORMAL);
+            view.setScale(cachedView.getScale());
             view.setTrackingPosition(false);
             view.setUnlimitedTracking(false);
             return;
@@ -377,7 +378,7 @@ public interface BukkitMapHandler {
         view.getRenderers().clear();
         view.addRenderer(new PersistentMapRenderer(canvasData));
         view.setLocked(true);
-        view.setScale(MapView.Scale.NORMAL);
+        view.setScale(MapView.Scale.values()[canvasData.getScale()]);
         view.setTrackingPosition(false);
         view.setUnlimitedTracking(false);
         setMapView(view);
@@ -603,7 +604,7 @@ public interface BukkitMapHandler {
                 }
 
             }
-            return MapData.fromPixels(mapDataVersion, pixels, getDimension(), (byte) 2, banners, List.of());
+            return MapData.fromPixels(mapDataVersion, pixels, getDimension(), (byte) mapView.getScale().getValue(), banners, List.of());
         }
     }
 
